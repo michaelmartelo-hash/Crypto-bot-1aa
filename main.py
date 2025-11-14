@@ -270,14 +270,14 @@ async def analyze_coin(coin_id):
         message = "\n".join(lines)
 
         # send text
-        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+        bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
 
         # send chart if available
         if chart_buf:
-            await bot.send_photo(chat_id=CHAT_ID, photo=chart_buf)
+            bot.send_photo(chat_id=CHAT_ID, photo=chart_buf)
         else:
             # small text to indicate no chart
-            await bot.send_message(chat_id=CHAT_ID, text="(No chart available)")
+            bot.send_message(chat_id=CHAT_ID, text="(No chart available)")
 
         print(f"Sent {label} analysis at {timestamp_str}")
     except Exception as e:
@@ -289,7 +289,7 @@ async def analyze_coin(coin_id):
 async def loop_crypto():
     # startup message once (catch exceptions silently)
     try:
-        await bot.send_message(chat_id=CHAT_ID, text="🤖 Crypto Bot iniciado (educativo). Enviaré análisis cada hora entre 06:00 y 21:30 hora Colombia.")
+        bot.send_message(chat_id=CHAT_ID, text="🤖 Crypto Bot iniciado (educativo). Enviaré análisis cada hora entre 06:00 y 21:30 hora Colombia.")
     except Exception as e:
         print("Startup message error:", e)
 
@@ -299,7 +299,7 @@ async def loop_crypto():
         if 6 <= now.hour < 21 or (now.hour == 21 and now.minute <= 30):
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] Within active window — analyzing")
             for coin in ["bitcoin", "ethereum", "ripple"]:
-                await analyze_coin(coin)
+                analyze_coin(coin)
         else:
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] Outside active window — sleeping")
         # Esperar hasta la próxima hora exacta en Colombia
@@ -309,7 +309,7 @@ async def loop_crypto():
         wait_seconds = (next_run - now).total_seconds()
         # Pero nunca esperar menos de 60s
         wait_seconds = max(wait_seconds, 60)
-        await asyncio.sleep(wait_seconds)
+        asyncio.sleep(wait_seconds)
 
 # ============================
 # 7) FastAPI para BetterStack (mantener vivo)
