@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 from telegram import Bot
 from fastapi import FastAPI
+import uvicorn
 
 # ============================
 # CONFIG
@@ -160,13 +161,11 @@ async def analyze_coin(coin_id):
             sma_val = df["SMA20"].iloc[-1]
             rsi_val = df["RSI14"].iloc[-1]
 
-            # Buy/sell levels based on min/max 24h
             min24 = df["price"].min()
             max24 = df["price"].max()
             buy_price = round(min24 * 1.02, 2)
             sell_price = round(max24 * 0.98, 2)
 
-            # Trend interpretation simplified
             trend = "Neutra"
             if price > sma_val:
                 trend = "Alcista"
@@ -185,7 +184,6 @@ async def analyze_coin(coin_id):
         chart_buf = create_chart_image(df, label)
         news_txt = get_news_for_symbol(label)
 
-        # Build message
         lines = [
             f"📊 *ANÁLISIS EDUCATIVO — {label}*",
             f"⏱ {timestamp_str} (hora Colombia)",
@@ -242,3 +240,10 @@ def home():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(loop_crypto())
+
+# ============================
+# ENTRY POINT PARA RENDER
+# ============================
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
