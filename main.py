@@ -11,7 +11,7 @@ from telegram import Bot
 from fastapi import FastAPI
 
 # ============================
-# CONFIG - leer de Secrets
+# CONFIG
 # ============================
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID"))
@@ -67,7 +67,7 @@ def get_coinbase_orderbook(coin_id):
     except Exception:
         return SEND_ORDERBOOK_FALLBACK_ZERO
 
-def get_history_coingecko(coin_id, days=2):
+def get_history_coingecko(coin_id, days=3):
     cg_id = COINGECKO_ID.get(coin_id, coin_id)
     try:
         r = requests.get(f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart",
@@ -110,16 +110,27 @@ def get_news_for_symbol(symbol, max_articles=3):
             pass
     return "📰 No hay noticias relevantes disponibles."
 
+# ============================
+# Chart with SMA + RSI
+# ============================
 def create_chart_image(df, symbol_label):
     try:
-        plt.figure(figsize=(8,3.6))
-        plt.plot(df["timestamp"], df["price"], label="Precio", linewidth=1.4)
+        plt.figure(figsize=(8,4))
+        plt.plot(df["timestamp"], df["price"], label="Precio", color="blue", linewidth=1.5)
         if "SMA20" in df.columns:
-            plt.plot(df["timestamp"], df["SMA20"], label="SMA20", linewidth=1.2)
+            plt.plot(df["timestamp"], df["SMA20"], label="SMA20 (media 20 períodos)", color="orange", linewidth=1.2)
+        if "RSI14" in df.columns:
+            # RSI subplot
+            ax1 = plt.gca()
+            ax2 = ax1.twinx()
+            ax2.plot(df["timestamp"], df["RSI14"], label="RSI14", color="green", linestyle="--", alpha=0.5)
+            ax2.axhline(70, color="red", linestyle=":")  # sobrecompra
+            ax2.axhline(30, color="purple", linestyle=":")  # sobreventa
+            ax2.set_ylabel("RSI14")
         plt.title(f"{symbol_label} - últimas 72h")
         plt.xlabel("Hora")
         plt.ylabel("USD")
-        plt.legend()
+        plt.legend(loc="upper left")
         plt.grid(alpha=0.3)
         buf = BytesIO()
         plt.tight_layout()
@@ -138,67 +149,77 @@ async def analyze_coin(coin_id):
     now = datetime.datetime.now(TZ)
     timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    price = get_coinbase_price(coin_id)
-    if price is None:
-        print(f"{label}: precio no disponible")
-        return
-
-    df = get_history_coingecko(coin_id, days=2)
-    if df.empty:
-        print(f"{label}: historial no disponible")
-        return
-
-    # Obtener precio exacto de "ayer a la misma hora"
-    yesterday_same_hour = now - datetime.timedelta(days=1)
-    df_prev = df.iloc[(df["timestamp"] - pd.Timestamp(yesterday_same_hour)).abs().argsort()[:1]]
-    prev_price = df_prev["price"].values[0] if not df_prev.empty else None
-    if prev_price is None:
-        print(f"{label}: precio de ayer no disponible")
-        return
-
-    change_pct = (price - prev_price) / prev_price * 100
-    if abs(change_pct) < 3:
-        print(f"{label}: cambio {change_pct:.2f}% < 3%, no se envía mensaje")
-        return
-
-    # Indicators
-    df["SMA20"] = df["price"].rolling(20).mean()
-    df["RSI14"] = calc_rsi(df["price"], 14)
-    sma_val = df["SMA20"].iloc[-1]
-    rsi_val = df["RSI14"].iloc[-1]
-
-    # Build message
-    lines = [
-        f"📊 *ANÁLISIS EDUCATIVO — {label}*",
-        f"⏱ {timestamp_str} (hora Colombia)",
-        f"💵 *Precio actual:* ${price:,.2f}",
-        f"📈 Precio {'por encima' if price > sma_val else 'por debajo'} de SMA20 (${sma_val:,.2f})" if pd.notna(sma_val) else "",
-        f"📉 RSI14: {rsi_val:.2f}" if pd.notna(rsi_val) else "",
-        f"📊 Cambio respecto ayer misma hora: {change_pct:.2f}%",
-        "",
-        get_news_for_symbol(label),
-        "",
-        "_Este análisis es educativo, no es asesoramiento financiero._"
-    ]
-
-    message = "\n".join([l for l in lines if l])
-
-    # Send
     try:
-        bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+        price = get_coinbase_price(coin_id)
+        bid_price, bid_qty, ask_price, ask_qty = get_coinbase_orderbook(coin_id)
+        df = get_history_coingecko(coin_id, days=3)
+
+        if not df.empty:
+            df["SMA20"] = df["price"].rolling(20).mean()
+            df["RSI14"] = calc_rsi(df["price"], 14)
+            sma_val = df["SMA20"].iloc[-1]
+            rsi_val = df["RSI14"].iloc[-1]
+
+            # Buy/sell levels based on min/max 24h
+            min24 = df["price"].min()
+            max24 = df["price"].max()
+            buy_price = round(min24 * 1.02, 2)
+            sell_price = round(max24 * 0.98, 2)
+
+            # Trend interpretation simplified
+            trend = "Neutra"
+            if price > sma_val:
+                trend = "Alcista"
+            elif price < sma_val:
+                trend = "Bajista"
+
+            rsi_status = "Neutral"
+            if rsi_val < 30:
+                rsi_status = "Sobreventa"
+            elif rsi_val > 70:
+                rsi_status = "Sobrecompra"
+
+        else:
+            sma_val, rsi_val, buy_price, sell_price, trend, rsi_status = None, None, None, None, "N/D", "N/D"
+
         chart_buf = create_chart_image(df, label)
+        news_txt = get_news_for_symbol(label)
+
+        # Build message
+        lines = [
+            f"📊 *ANÁLISIS EDUCATIVO — {label}*",
+            f"⏱ {timestamp_str} (hora Colombia)",
+            "",
+            f"💵 *Precio actual:* ${price:,.2f}" if price else "💵 *Precio actual:* N/D",
+            f"🟢 *Bid:* ${bid_price:,.2f} (qty: {bid_qty})" if bid_price else "",
+            f"🔴 *Ask:* ${ask_price:,.2f} (qty: {ask_qty})" if ask_price else "",
+            f"💡 *Sugerencia educativa:* Comprar ~ ${buy_price:,} — Vender ~ ${sell_price:,}" if buy_price and sell_price else "",
+            f"📈 Tendencia aproximada: {trend}",
+            f"📉 Estado RSI: {rsi_status}",
+            "",
+            news_txt,
+            "",
+            "_Este análisis es educativo, no es asesoramiento financiero._"
+        ]
+
+        message = "\n".join([l for l in lines if l])
+
+        bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
         if chart_buf:
             bot.send_photo(chat_id=CHAT_ID, photo=chart_buf)
-        print(f"✅ {label} enviado, cambio {change_pct:.2f}%")
+        else:
+            bot.send_message(chat_id=CHAT_ID, text="(No chart available)")
+
+        print(f"✅ Enviado análisis de {label} a las {timestamp_str}")
     except Exception as e:
-        print(f"Error enviando {label}:", e)
+        print("❌ Error analyzing", coin_id, e)
 
 # ============================
 # LOOP
 # ============================
 async def loop_crypto():
     try:
-        bot.send_message(chat_id=CHAT_ID, text="🤖 Crypto Bot iniciado (educativo). Notificaciones solo si cambio ≥3% vs ayer misma hora.")
+        bot.send_message(chat_id=CHAT_ID, text="🤖 Crypto Bot iniciado (educativo). Enviaré análisis cada hora entre 06:00 y 21:30 hora Colombia.")
     except Exception:
         pass
 
@@ -221,6 +242,3 @@ def home():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(loop_crypto())
-
-
-
