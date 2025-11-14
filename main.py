@@ -323,10 +323,4 @@ async def startup_event():
     # start background loop
     asyncio.create_task(loop_crypto())
 
-# ============================
-# 8) RUN SERVER
-# ============================
-if __name__ == "__main__":
-    # debug: show small message
-    print("Starting uvicorn...")
-    uvicorn.run(app, host="0.0.0.0", port=3000)
+
